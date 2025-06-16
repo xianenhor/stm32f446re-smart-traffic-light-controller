@@ -2,11 +2,9 @@
 #include <stdbool.h>
 
 void RunTrafficSequence(int i, int delay);
-void ResetOtherCountsExcept(uint8_t currentIndex);  // helper function declaration
 
 uint32_t u32LONGBLINKING = 3000;   // 3s
 uint32_t u32SHORTBLINKING = 1500;  // 1.5s
-uint8_t count [4] = {0,0,0,0};
 
 uint16_t red_pins[] = {
     (1 << 0),   // PC0 - TL_Red_1
@@ -59,100 +57,72 @@ int main(void)
      * sensor2_pin_4 = pin 7
      */
 
-    RCC->AHB1ENR |= 0x06;
-    GPIOB->MODER = 0;
-    GPIOC->MODER |= 0x555555;
+    RCC->AHB1ENR |= 0x06; // Enable the clock of Port B and C
+    GPIOB->MODER = 0; // Set Port B as input
+    GPIOC->MODER |= 0x555555;  // Set Port C as output
 
     while (1)
     {
         uint8_t ir_status = GPIOB->IDR & 0xFF;
 
-        bool sensor1_active = ((ir_status & 0x0F) == 0);     // All sensor1 active
-        bool sensor2_active = ((ir_status & 0xF0) == 0);     // All sensor2 active
-        bool all_inactive   = (ir_status == 0xFF);           // None active (all high)
 
-        bool sensor1_pin1   = ((ir_status & (1 << 0)) == 0); // sensor1_pin_1 detects car
-        bool sensor2_pin1   = ((ir_status & (1 << 4)) == 0); // sensor2_pin_1 detects car
-
-        bool sensor1_pin2   = ((ir_status & (1 << 1)) == 0); // sensor1_pin_2 detects car
-        bool sensor2_pin2   = ((ir_status & (1 << 5)) == 0); // sensor2_pin_2 detects car
-
-        bool sensor1_pin3   = ((ir_status & (1 << 2)) == 0); // sensor1_pin_3 detects car
-        bool sensor2_pin3   = ((ir_status & (1 << 6)) == 0); // sensor2_pin_3 detects car
-
-        bool sensor1_pin4   = ((ir_status & (1 << 3)) == 0); // sensor1_pin_4 detects car
-        bool sensor2_pin4   = ((ir_status & (1 << 7)) == 0); // sensor2_pin_4 detects car
-
-        bool any_sensor2_detect = (ir_status & 0xF0) != 0xF0; // At least one sensor2 detects car
+        bool all_inactive = (ir_status == 0xFF); // None active (all high)
 
         // Turn on all TL red light
         for (int j = 0; j < 4; j++) {
             GPIOC->ODR |= red_pins[j];
         }
 
-        // Scenario 1: when no car at all junction and no sensor hit, green light on 1.5s, TL run by sequence
-        if (all_inactive) {
-            RunTrafficSequence(index, u32SHORTBLINKING);
-        }
 
-        // Scenario 2: when all car arrive at all of the junction and hit the sensor, run TL by sequence with the sensor hit
-        // only first sensor hit - 15s
-        // first sensor and second sensor hit - 30s
-        else if (sensor2_pin1 && sensor2_pin2 && sensor2_pin3 && sensor2_pin4) {
-            RunTrafficSequence(index, u32LONGBLINKING );
-        }
+		// Scenario 1: when no car at all junction and no sensor hit, green light on 1.5s, TL run by sequence
+		if (all_inactive) {
+			RunTrafficSequence(index, u32SHORTBLINKING);
 
-        else if ( (count[0] < 3 ) && (count[1] < 3 ) && (count[2] < 3 ) && (count[3] < 3 ) && sensor1_active) {
-            if (sensor2_pin1) index = 0;
-            else if (sensor2_pin2) index = 1;
-            else if (sensor2_pin3) index = 2;
-            else if (sensor2_pin4) index = 3;
-            RunTrafficSequence(index, any_sensor2_detect ? u32LONGBLINKING : u32SHORTBLINKING);
-            count[index] +=1;
-            ResetOtherCountsExcept(index);  // Reset other lanes' counts except the current active one
-        }
+		}
 
-        // Scenario 3: rewrite sequence if any car detected
-        else if ((count[0] < 3 ) && sensor1_pin1) {
-            index = 0;
-            RunTrafficSequence(index, sensor2_pin1 ? u32LONGBLINKING : u32SHORTBLINKING);
+		// Scenario 2: when all car arrive at all of the junction and hit the sensor, run TL by sequence with the sensor hit
+		// only first sensor hit - 15s
+		// first sensor and second sensor hit - 30s
 
-            // Scenario 4: Each lane only gets to run 3 times max before the reserve is disabled
-            count[index] +=1;
-            ResetOtherCountsExcept(index);  // Reset other lanes' counts except the current active one
-        }
+		// Scenario 3: overwrite the TL sequence if any car detected; only first sensor hit - 15s first sensor and second sensor hit - 30s
 
-        else if ( (count[1] < 3 ) && sensor1_pin2) {
-            index = 1;
-            RunTrafficSequence(index, sensor2_pin2 ? u32LONGBLINKING : u32SHORTBLINKING);
-            count[index] +=1;
-            ResetOtherCountsExcept(index);  // Reset other lanes' counts except the current active one
-        }
+		else {
+			bool handled = false;
 
-        else if ( (count[2] < 3 ) && sensor1_pin3) {
-            index = 2;
-            RunTrafficSequence(index, sensor2_pin3 ? u32LONGBLINKING : u32SHORTBLINKING);
-            count[index] +=1;
-            ResetOtherCountsExcept(index);  // Reset other lanes' counts except the current active one
-        }
+			// Highest priority: sensor2 hit
+			for (int j = 0; j < 4; j++) {
+				int z = (j + index) % 4;
+				bool sensor2 = ((ir_status & (1 << (z + 4))) == 0); // PB4–PB7
+				if (sensor2) {
+					index = z;
+					RunTrafficSequence(index, u32LONGBLINKING);
+					handled = true;
+					break;
+				}
+			}
 
-        else if ( (count[3] < 3 ) && sensor1_pin4) {
-            index = 3;
-            RunTrafficSequence(index, sensor2_pin4 ? u32LONGBLINKING : u32SHORTBLINKING);
-            count[index] +=1;
-            ResetOtherCountsExcept(index);  // Reset other lanes' counts except the current active one
-        }
+			if (!handled) {
+				// Next priority: sensor1 hit
+				for (int j = 0; j < 4; j++) {
+					int z = (j + index) % 4;
+					bool sensor1 = ((ir_status & (1 << z)) == 0); // PB0–PB3
+					if (sensor1) {
+						index = z;
+						RunTrafficSequence(index, u32SHORTBLINKING);
+						handled = true;
+						break;
+					}
+				}
+			}
 
-        else {
-            RunTrafficSequence(index, u32SHORTBLINKING);  // fallback/default
-            ResetOtherCountsExcept(index);  // Reset other lanes' counts except the current active one
-        }
+			if (!handled) {
+				// Default fallback: all inactive or unrecognized
+				RunTrafficSequence(index, u32SHORTBLINKING);
+			}
+		}
+		index = (index + 1) % 4;
+		HAL_Delay(100);
 
-        // Move to next in round-robin
-        index = (index + 1) % 4;
-
-        // Optional: delay for debounce or smooth loop timing
-        HAL_Delay(100);
     }
 }
 
@@ -174,12 +144,4 @@ void RunTrafficSequence(int i, int delay)
 
     // Red on
     GPIOC->ODR |= red_pins[i];
-}
-
-// Function to reset all other traffic lane counts except the currently running one
-void ResetOtherCountsExcept(uint8_t currentIndex)
-{
-    for (int j = 0; j < 4; j++) {
-        if (j != currentIndex) count[j] = 0;
-    }
 }
